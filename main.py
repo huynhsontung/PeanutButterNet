@@ -5,13 +5,13 @@ import numpy as np
 
 
 hparams = {
-    'num_conv_filters': 44,
+    'num_conv_filters': 32,
     'num_blocks': 5,
-    'num_cells': 12,
+    'num_cells': 10,
     'num_reduction_cells': 2,
     'dropout_prob': 0.5,
+    'filter_scaling_rate': 1.0,
     # stem_multiplier=1.0,
-    # filter_scaling_rate=2.0,
     # drop_path_keep_prob=1.0,
     # num_conv_filters=44,
     # use_aux_head=1,
@@ -24,31 +24,33 @@ hparams = {
 rng = np.random.default_rng()
 
 
-def generate_operation(reduce=False, activation='relu') -> Operation:
+def generate_operation(activation='relu') -> Operation:
     op_type = rng.choice(list(OperationType), 1)[0]
-    return Operation(op_type, reduce=reduce, activation=activation)
+    num_conv_filters = hparams['num_conv_filters']
+    filter_scaling_rate = hparams['filter_scaling_rate']
+    return Operation(op_type, init_filters=num_conv_filters,
+                     filter_scaling_rate=filter_scaling_rate, activation=activation)
 
 
-def generate_block(concat=False, reduce=False) -> Block:
-    op0 = generate_operation(reduce)
-    op1 = generate_operation(reduce)
-    return Block(op0, op1, concat)
+def generate_block() -> Block:
+    op0 = generate_operation()
+    op1 = generate_operation()
+    return Block(op0, op1)
 
 
 def generate_cell(reduce=False) -> Cell:
     num_blocks = hparams['num_blocks']
-    concat_opts = np.random.choice([True, False], size=num_blocks)
-    blocks = [generate_block(concat=concat_opts[i], reduce=reduce)
-              for i in range(num_blocks)]
+    blocks = [generate_block()
+              for _ in range(num_blocks)]
 
     block_inputs = generate_recursive_indices(2, 2, num_blocks)
-    return Cell(blocks, block_inputs)
+    return Cell(blocks, block_inputs, reduce=reduce)
 
 
 def generate_model(input_shape: tuple[int, int, int],
                    num_classes: int, hparams: dict[str, int]) -> keras.Model:
     num_cells = hparams['num_cells']
-    num_reduction_cells = hparams['num_reduction_cell']
+    num_reduction_cells = hparams['num_reduction_cells']
     dropout_prob = hparams['dropout_prob']
     num_between = int((num_cells - num_reduction_cells) /
                       (num_reduction_cells + 1))
@@ -71,6 +73,13 @@ def generate_model(input_shape: tuple[int, int, int],
         input_tup = input_indices[i]
         input0 = hiddens[input_tup[0]]
         input1 = hiddens[input_tup[1]]
+        # if input0.shape[1:3] != input1.shape[1:3]:
+        #     target_shape = max(input0.shape[1:3], input1.shape[1:3])
+        #     if input0.shape != target_shape:
+        #         input0 = keras.layers.experimental.preprocessing.Resizing(target_shape[0], target_shape[1])(input0)
+        #     else:
+        #         input1 = keras.layers.experimental.preprocessing.Resizing(target_shape[0], target_shape[1])(input1)
+
         hidden = cell(input0, input1)
         hiddens.append(hidden)
 
@@ -82,3 +91,7 @@ def generate_model(input_shape: tuple[int, int, int],
 
     model = keras.Model(inputs, outputs, name="PeanutButterNet")
     return model
+
+
+model = generate_model((256, 256, 1), 10, hparams)
+model.summary()
