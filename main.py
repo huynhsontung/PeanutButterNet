@@ -1,95 +1,84 @@
-from PeanutButterNet.utils import extract_kernel_sizes
-from enum import Enum
-import tensorflow as tf
+from tensorflow import keras
+from utils import generate_recursive_indices
+from model import Block, Cell, Operation, OperationType
+import numpy as np
 
 
-class CellType(Enum):
-    NORMAL = 1
-    REDUCTION = 2
+hparams = {
+    'num_conv_filters': 44,
+    'num_blocks': 5,
+    'num_cells': 12,
+    'num_reduction_cells': 2,
+    'dropout_prob': 0.5,
+    # stem_multiplier=1.0,
+    # filter_scaling_rate=2.0,
+    # drop_path_keep_prob=1.0,
+    # num_conv_filters=44,
+    # use_aux_head=1,
+    # data_format='NHWC',
+    # skip_reduction_layer_input=0,
+    # total_training_steps=250000,
+    # use_bounded_activation=False,
+}
+
+rng = np.random.default_rng()
 
 
-class OperationType(Enum):
-    IDENTITY = 1
-    CONV_1X3_3X1 = 2
-    CONV_1X7_7X1 = 3
-    CONV_1X1 = 4
-    CONV_3X3 = 5
-    AVG_POOLING_3X3 = 6
-    MAX_POOLING_3X3 = 7
-    MAX_POOLING_5X5 = 8
-    MAX_POOLING_7x7 = 9
-    SEP_CONV_3X3 = 10
-    SEP_CONV_5X5 = 11
-    SEP_CONV_7X7 = 12
-    DILATED_CONV_3X3 = 13
+def generate_operation(reduce=False, activation='relu') -> Operation:
+    op_type = rng.choice(list(OperationType), 1)[0]
+    return Operation(op_type, reduce=reduce, activation=activation)
 
 
-class HParams():
-    def __init__(self, **kwargs) -> None:
-        self.params = kwargs
-        # stem_multiplier=1.0,
-        # dense_dropout_keep_prob=0.5,
-        # num_cells=12,
-        # filter_scaling_rate=2.0,
-        # drop_path_keep_prob=1.0,
-        # num_conv_filters=44,
-        # use_aux_head=1,
-        # num_reduction_layers=2,
-        # data_format='NHWC',
-        # skip_reduction_layer_input=0,
-        # total_training_steps=250000,
-        # use_bounded_activation=False,
+def generate_block(concat=False, reduce=False) -> Block:
+    op0 = generate_operation(reduce)
+    op1 = generate_operation(reduce)
+    return Block(op0, op1, concat)
 
 
-class Operation():
-    def __init__(self, op_type: OperationType, hparams: HParams,
-                 reduce=False, **kwargs) -> None:
-        op_name = op_type.name.lower()
-        self.ops: list[tf.keras.layers.Layer] = []
-        if op_type == OperationType.IDENTITY:
-            pass
-        elif "conv" in op_name:
-            filter_size = hparams["num_conv_filters"]
-            stride = 2 if reduce else 1
-            kernel_sizes = extract_kernel_sizes(op_type.name)
-            dilation_rate = 2 if "dilated" in op_name else 1
-            if "sep" in op_name:
-                self.ops = [
-                    tf.keras.layers.SeparableConv2D(
-                        filter_size,
-                        kernel,
-                        stride,
-                        dilation_rate=dilation_rate, **kwargs) for kernel in kernel_sizes]
-            else:
-                self.ops = [
-                    tf.keras.layers.Conv2D(
-                        filter_size,
-                        kernel,
-                        stride,
-                        dilation_rate=dilation_rate, **kwargs) for kernel in kernel_sizes]
-        elif "max_pool" in op_name:
-            # TODO: Implement max pool
-            pass
-        elif "avg_pool" in op_name:
-            # TODO: Implement avg pool
-            pass
+def generate_cell(reduce=False) -> Cell:
+    num_blocks = hparams['num_blocks']
+    concat_opts = np.random.choice([True, False], size=num_blocks)
+    blocks = [generate_block(concat=concat_opts[i], reduce=reduce)
+              for i in range(num_blocks)]
 
-    def __call__(self, hidden: tf.Tensor) -> tf.Tensor:
-        for op in self.ops:
-            hidden = op(hidden)
-        
-        return hidden
+    block_inputs = generate_recursive_indices(2, 2, num_blocks)
+    return Cell(blocks, block_inputs)
 
 
-class Block():
-    def __init__(self, op0: Operation, op1: Operation) -> None:
-        self.op0 = op0
-        self.op1 = op1
+def generate_model(input_shape: tuple[int, int, int],
+                   num_classes: int, hparams: dict[str, int]) -> keras.Model:
+    num_cells = hparams['num_cells']
+    num_reduction_cells = hparams['num_reduction_cell']
+    dropout_prob = hparams['dropout_prob']
+    num_between = int((num_cells - num_reduction_cells) /
+                      (num_reduction_cells + 1))
 
-    def __call__(self, hidden0: tf.Tensor, hidden1: tf.Tensor, concat=False) -> tf.Tensor:
-        hidden0 = self.op0(hidden0)
-        hidden1 = self.op1(hidden1)
-        if concat:
-            return tf.keras.layers.concatenate([hidden0, hidden1], axis=-1)
-        else:
-            return tf.keras.layers.add([hidden0, hidden1])
+    cells: list[Cell] = []
+    while num_reduction_cells > 0:
+        cells += [generate_cell(reduce=False) for _ in range(num_between)]
+        cells.append(generate_cell(reduce=True))
+        num_reduction_cells -= 1
+
+    num_left = num_cells - len(cells)
+    if num_left > 0:
+        cells += [generate_cell(reduce=False) for _ in range(num_left)]
+
+    input_indices = generate_recursive_indices(1, 2, num_cells)
+    inputs = keras.Input(input_shape)
+    hiddens = [inputs]
+
+    for i, cell in enumerate(cells):
+        input_tup = input_indices[i]
+        input0 = hiddens[input_tup[0]]
+        input1 = hiddens[input_tup[1]]
+        hidden = cell(input0, input1)
+        hiddens.append(hidden)
+
+    # Connect specific layers to the final cell to get the result
+    final_hidden = hiddens[-1]
+    x = keras.layers.GlobalAvgPool2D()(final_hidden)
+    x = keras.layers.Dropout(dropout_prob)(x)
+    outputs = keras.layers.Dense(num_classes, activation='softmax')
+
+    model = keras.Model(inputs, outputs, name="PeanutButterNet")
+    return model
