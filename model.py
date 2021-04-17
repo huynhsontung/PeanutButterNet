@@ -1,4 +1,4 @@
-from .utils import extract_kernel_sizes
+from utils import extract_kernel_sizes
 from enum import Enum
 import tensorflow as tf
 import tensorflow.keras as keras
@@ -26,40 +26,48 @@ class OperationType(Enum):
 
 
 class Operation():
-    def __init__(self, op_type: OperationType, reduce=False, num_conv_filters=32, **kwargs) -> None:
+    def __init__(self, op_type: OperationType, reduce=False,
+                 num_conv_filters=32, **kwargs) -> None:
         op_name = op_type.name.lower()
         self.ops: list[tf.keras.layers.Layer] = []
         if op_type == OperationType.IDENTITY:
             pass
-        elif "conv" in op_name:
+        else:
             stride = 2 if reduce else 1
             kernel_sizes = extract_kernel_sizes(op_type.name)
             dilation_rate = 2 if "dilated" in op_name else 1
-            if "sep" in op_name:
+            if "conv" in op_name:
+                if "sep" in op_name:
+                    self.ops = [
+                        keras.layers.SeparableConv2D(
+                            num_conv_filters,
+                            kernel,
+                            stride,
+                            dilation_rate=dilation_rate, **kwargs) for kernel in kernel_sizes]
+                else:
+                    self.ops = [
+                        keras.layers.Conv2D(
+                            num_conv_filters,
+                            kernel,
+                            stride,
+                            dilation_rate=dilation_rate, **kwargs) for kernel in kernel_sizes]
+            elif "max_pool" in op_name:
                 self.ops = [
-                    tf.keras.layers.SeparableConv2D(
-                        num_conv_filters,
-                        kernel,
-                        stride,
-                        dilation_rate=dilation_rate, **kwargs) for kernel in kernel_sizes]
+                    keras.layers.MaxPool2D(
+                        pool_size=pool_size,
+                        strides=stride) for pool_size in kernel_sizes]
+            elif "avg_pool" in op_name:
+                self.ops = [
+                    keras.layers.AveragePooling2D(
+                        pool_size=pool_size,
+                        strides=stride) for pool_size in kernel_sizes]
             else:
-                self.ops = [
-                    tf.keras.layers.Conv2D(
-                        num_conv_filters,
-                        kernel,
-                        stride,
-                        dilation_rate=dilation_rate, **kwargs) for kernel in kernel_sizes]
-        elif "max_pool" in op_name:
-            # TODO: Implement max pool
-            pass
-        elif "avg_pool" in op_name:
-            # TODO: Implement avg pool
-            pass
+                raise ValueError("Operation type not supported")
 
     def __call__(self, hidden: tf.Tensor) -> tf.Tensor:
         for op in self.ops:
             hidden = op(hidden)
-        
+
         return hidden
 
 
@@ -79,7 +87,8 @@ class Block():
 
 
 class Cell():
-    def __init__(self, blocks: list[Block], connections: list[tuple[int, int]]) -> None:
+    def __init__(self, blocks: list[Block],
+                 connections: list[tuple[int, int]]) -> None:
         assert len(blocks) == len(connections)
         self.blocks = blocks
         self.connections = connections
@@ -90,7 +99,8 @@ class Cell():
         hiddens = [hidden0, hidden1]
         outputs: list[tf.Tensor] = []
         while connections:
-            candidate_idx = [all([x <= counter for x in c]) for c in connections].index(True)
+            candidate_idx = [all([x <= counter for x in c])
+                             for c in connections].index(True)
             block = self.blocks[candidate_idx]
             block_input = connections[candidate_idx]
             entry = block(hiddens[block_input[0]], hiddens[block_input[1]])
