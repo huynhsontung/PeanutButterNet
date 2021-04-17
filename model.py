@@ -1,3 +1,4 @@
+import itertools
 from utils import extract_kernel_sizes
 from enum import Enum
 import tensorflow as tf
@@ -35,9 +36,12 @@ class Operation():
         self.ops: list[tf.keras.layers.Layer] = []
 
     def __call__(self, hidden: tf.Tensor, reduce=False, **kwargs) -> tf.Tensor:
+        self.ops.clear()
+        self.reduce = reduce
         op_name = self.op_type.name.lower()
         if self.op_type == OperationType.IDENTITY:
-            pass
+            if reduce:
+                self.ops = [keras.layers.AvgPool2D(pool_size=2)]
         else:
             stride = 2 if reduce else 1
             kernel_sizes = extract_kernel_sizes(self.op_type.name)
@@ -51,31 +55,31 @@ class Operation():
                         keras.layers.SeparableConv2D(
                             filters,
                             kernel,
-                            strides=stride,
+                            strides=stride if i == 0 else 1,
                             padding='same',
                             dilation_rate=dilation_rate,
-                            activation=self.activation, **kwargs) for kernel in kernel_sizes]
+                            activation=self.activation, **kwargs) for i, kernel in enumerate(kernel_sizes)]
                 else:
                     self.ops = [
                         keras.layers.Conv2D(
                             filters,
                             kernel,
-                            strides=stride,
+                            strides=stride if i == 0 else 1,
                             padding='same',
                             dilation_rate=dilation_rate,
-                            activation=self.activation, **kwargs) for kernel in kernel_sizes]
+                            activation=self.activation, **kwargs) for i, kernel in enumerate(kernel_sizes)]
             elif "max_pool" in op_name:
                 self.ops = [
                     keras.layers.MaxPool2D(
                         pool_size=pool_size,
                         padding='same',
-                        strides=stride) for pool_size in kernel_sizes]
+                        strides=stride if i == 0 else 1) for i, pool_size in enumerate(kernel_sizes)]
             elif "avg_pool" in op_name:
                 self.ops = [
                     keras.layers.AvgPool2D(
                         pool_size=pool_size,
                         padding='same',
-                        strides=stride) for pool_size in kernel_sizes]
+                        strides=stride if i == 0 else 1) for i, pool_size in enumerate(kernel_sizes)]
             else:
                 raise ValueError("Operation type not supported")
 
@@ -98,12 +102,19 @@ class Block():
         else:
             reduce0 = hidden0.shape[1] > hidden1.shape[1]
             hidden0 = self.op0(hidden0, reduce=reduce0, **kwargs)
-            hidden1 = self.op1(hidden1, reduce=not reduce0, **kwargs)
+            hidden1 = self.op1(hidden1, reduce=(not reduce0), **kwargs)
 
-        if hidden0.shape[-1] == hidden1.shape[-1]:
+        channels0 = hidden0.shape[-1]
+        channels1 = hidden1.shape[-1]
+        if channels0 == channels1:
             return keras.layers.add([hidden0, hidden1])
-        else:
+        elif channels0 % channels1 != 0 and channels1 % channels0 != 0:
             return keras.layers.concatenate([hidden0, hidden1], axis=-1)
+        elif channels0 % channels1 == 0:
+            hidden1 = keras.layers.Conv2D(channels0, kernel_size=1)(hidden1)
+        else:
+            hidden0 = keras.layers.Conv2D(channels1, kernel_size=1)(hidden0)
+        return keras.layers.add([hidden0, hidden1])
 
 
 class Cell():
@@ -137,4 +148,10 @@ class Cell():
             outputs.append(entry)
             counter += 1
 
-        return keras.layers.concatenate(outputs, axis=-1)
+        flat_connections = [i for tup in self.connections for i in tup]
+        is_branch = [
+            (i +
+             2) not in flat_connections for i in range(
+                len(outputs))]
+        branches = list(itertools.compress(outputs, is_branch))
+        return keras.layers.concatenate(branches, axis=-1)

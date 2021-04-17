@@ -73,21 +73,16 @@ def generate_model(input_shape: tuple[int, int, int],
         input_tup = input_indices[i]
         input0 = hiddens[input_tup[0]]
         input1 = hiddens[input_tup[1]]
-        # if input0.shape[1:3] != input1.shape[1:3]:
-        #     target_shape = max(input0.shape[1:3], input1.shape[1:3])
-        #     if input0.shape != target_shape:
-        #         input0 = keras.layers.experimental.preprocessing.Resizing(target_shape[0], target_shape[1])(input0)
-        #     else:
-        #         input1 = keras.layers.experimental.preprocessing.Resizing(target_shape[0], target_shape[1])(input1)
 
         hidden = cell(input0, input1)
+        print(hidden.shape)
         hiddens.append(hidden)
 
     # Connect specific layers to the final cell to get the result
     final_hidden = hiddens[-1]
     x = keras.layers.GlobalAvgPool2D()(final_hidden)
     x = keras.layers.Dropout(dropout_prob)(x)
-    outputs = keras.layers.Dense(num_classes, activation='softmax')
+    outputs = keras.layers.Dense(num_classes, activation='softmax')(x)
 
     model = keras.Model(inputs, outputs, name="PeanutButterNet")
     return model
