@@ -27,6 +27,8 @@ class OperationType(Enum):
 
 
 class Operation():
+    _op_count = 0
+
     def __init__(self, op_type: OperationType,
                  init_filters: int = 32, filter_scaling_rate: int = 2, activation: str = 'relu') -> None:
         self.op_type = op_type
@@ -35,53 +37,64 @@ class Operation():
         self.activation = activation
         self.ops: list[tf.keras.layers.Layer] = []
 
-    def __call__(self, hidden: tf.Tensor, reduce=False, **kwargs) -> tf.Tensor:
+    def __call__(self, hidden: tf.Tensor, reduce=False,
+                 name: str = None, **kwargs) -> tf.Tensor:
         self.ops.clear()
         self.reduce = reduce
         op_name = self.op_type.name.lower()
+        layer_name = None
+        if name:
+            layer_name = name + '_' + op_name + '_' + str(Operation._op_count)
+        Operation._op_count += 1
         if self.op_type == OperationType.IDENTITY:
             if reduce:
-                self.ops = [keras.layers.AvgPool2D(pool_size=2)]
+                self.ops.append(keras.layers.AvgPool2D(
+                    pool_size=2,
+                    name=layer_name))
         else:
             stride = 2 if reduce else 1
             kernel_sizes = extract_kernel_sizes(self.op_type.name)
             dilation_rate = 2 if "dilated" in op_name and stride == 1 else 1
             filters = self.init_filters \
-                if self.init_filters % hidden.shape[-1] == 0 \
+                if self.init_filters >= hidden.shape[-1] \
                 else int(hidden.shape[-1] * self.filter_scaling_rate)
-            if "conv" in op_name:
-                if "sep" in op_name:
-                    self.ops = [
-                        keras.layers.SeparableConv2D(
+            for i, kernel in enumerate(kernel_sizes):
+                if layer_name and len(kernel_sizes) > 1:
+                    layer_name = layer_name + '_%d' % i
+
+                if "conv" in op_name:
+                    if "sep" in op_name:
+                        self.ops.append(keras.layers.SeparableConv2D(
                             filters,
                             kernel,
                             strides=stride if i == 0 else 1,
                             padding='same',
                             dilation_rate=dilation_rate,
-                            activation=self.activation, **kwargs) for i, kernel in enumerate(kernel_sizes)]
+                            activation=self.activation,
+                            name=layer_name))
+                    else:
+                        self.ops.append(keras.layers.Conv2D(
+                            filters,
+                            kernel,
+                            strides=stride if i == 0 else 1,
+                            padding='same',
+                            dilation_rate=dilation_rate,
+                            activation=self.activation,
+                            name=layer_name))
+                elif "max_pool" in op_name:
+                    self.ops.append(keras.layers.MaxPool2D(
+                        pool_size=kernel,
+                        padding='same',
+                        strides=stride if i == 0 else 1,
+                        name=layer_name))
+                elif "avg_pool" in op_name:
+                    self.ops.append(keras.layers.AvgPool2D(
+                        pool_size=kernel,
+                        padding='same',
+                        strides=stride if i == 0 else 1,
+                        name=layer_name))
                 else:
-                    self.ops = [
-                        keras.layers.Conv2D(
-                            filters,
-                            kernel,
-                            strides=stride if i == 0 else 1,
-                            padding='same',
-                            dilation_rate=dilation_rate,
-                            activation=self.activation, **kwargs) for i, kernel in enumerate(kernel_sizes)]
-            elif "max_pool" in op_name:
-                self.ops = [
-                    keras.layers.MaxPool2D(
-                        pool_size=pool_size,
-                        padding='same',
-                        strides=stride if i == 0 else 1) for i, pool_size in enumerate(kernel_sizes)]
-            elif "avg_pool" in op_name:
-                self.ops = [
-                    keras.layers.AvgPool2D(
-                        pool_size=pool_size,
-                        padding='same',
-                        strides=stride if i == 0 else 1) for i, pool_size in enumerate(kernel_sizes)]
-            else:
-                raise ValueError("Operation type not supported")
+                    raise ValueError("Operation type not supported")
 
         for op in self.ops:
             hidden = op(hidden)
@@ -94,27 +107,54 @@ class Block():
         self.op0 = op0
         self.op1 = op1
 
-    def __call__(self, hidden0: tf.Tensor, hidden1: tf.Tensor, reduce=False,
+    def __call__(self, hidden0: tf.Tensor, hidden1: tf.Tensor, reduce=False, name: str = None,
                  **kwargs) -> tf.Tensor:
+
+        name_left = None
+        name_right = None
+        name_add = None
+        if name:
+            name_left = name + '_left'
+            name_right = name + '_right'
+            name_add = name + '_add'
+
         if hidden0.shape[1:3] == hidden1.shape[1:3]:
-            hidden0 = self.op0(hidden0, reduce=reduce, **kwargs)
-            hidden1 = self.op1(hidden1, reduce=reduce, **kwargs)
+            hidden0 = self.op0(
+                hidden0,
+                reduce=reduce,
+                name=name_left,
+                **kwargs)
+            hidden1 = self.op1(
+                hidden1,
+                reduce=reduce,
+                name=name_right,
+                **kwargs)
         else:
             reduce0 = hidden0.shape[1] > hidden1.shape[1]
-            hidden0 = self.op0(hidden0, reduce=reduce0, **kwargs)
-            hidden1 = self.op1(hidden1, reduce=(not reduce0), **kwargs)
+            hidden0 = self.op0(
+                hidden0,
+                reduce=reduce0,
+                name=name_left,
+                **kwargs)
+            hidden1 = self.op1(
+                hidden1,
+                reduce=(
+                    not reduce0),
+                name=name_right,
+                **kwargs)
 
         channels0 = hidden0.shape[-1]
         channels1 = hidden1.shape[-1]
         if channels0 == channels1:
-            return keras.layers.add([hidden0, hidden1])
+            return keras.layers.add([hidden0, hidden1], name=name_add)
         elif channels0 % channels1 != 0 and channels1 % channels0 != 0:
-            return keras.layers.concatenate([hidden0, hidden1], axis=-1)
+            return keras.layers.concatenate(
+                [hidden0, hidden1], axis=-1, name=name_add)
         elif channels0 % channels1 == 0:
             hidden1 = keras.layers.Conv2D(channels0, kernel_size=1)(hidden1)
         else:
             hidden0 = keras.layers.Conv2D(channels1, kernel_size=1)(hidden0)
-        return keras.layers.add([hidden0, hidden1])
+        return keras.layers.add([hidden0, hidden1], name=name_add)
 
 
 class Cell():
@@ -126,7 +166,7 @@ class Cell():
         self.connections = connections
         self.reduce = reduce
 
-    def __call__(self, hidden0: tf.Tensor, hidden1: tf.Tensor,
+    def __call__(self, hidden0: tf.Tensor, hidden1: tf.Tensor, name: str = None,
                  **kwargs) -> tf.Tensor:
         counter = 1
         connections = self.connections.copy()
@@ -139,9 +179,10 @@ class Cell():
             block_input = connections[candidate_idx]
             reduce = self.reduce and block_input in [
                 (0, 0), (0, 1), (1, 0), (1, 1)]
+            block_name = name + '_block_' + str(counter - 1) if name else None
             entry = block(hiddens[block_input[0]],
                           hiddens[block_input[1]],
-                          reduce=reduce, **kwargs)
+                          reduce=reduce, name=block_name, **kwargs)
 
             connections.pop(candidate_idx)
             hiddens.append(entry)
@@ -150,8 +191,6 @@ class Cell():
 
         flat_connections = [i for tup in self.connections for i in tup]
         is_branch = [
-            (i +
-             2) not in flat_connections for i in range(
-                len(outputs))]
+            (i + 2) not in flat_connections for i in range(len(outputs))]
         branches = list(itertools.compress(outputs, is_branch))
         return keras.layers.concatenate(branches, axis=-1)

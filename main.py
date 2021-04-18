@@ -7,7 +7,7 @@ import datetime
 
 
 hparams = {
-    'num_conv_filters': 32,
+    'num_conv_filters': 24,
     'num_blocks': 5,
     'num_cells': 18,
     'num_reduction_cells': 2,
@@ -57,15 +57,17 @@ def generate_model(input_shape: tuple[int, int, int],
     num_between = int((num_cells - num_reduction_cells) /
                       (num_reduction_cells + 1))
 
+    normal_cell = generate_cell(reduce=False)
+    reduce_cell = generate_cell(reduce=True)
     cells: list[Cell] = []
     while num_reduction_cells > 0:
-        cells += [generate_cell(reduce=False) for _ in range(num_between)]
-        cells.append(generate_cell(reduce=True))
+        cells += [normal_cell for _ in range(num_between)]
+        cells.append(reduce_cell)
         num_reduction_cells -= 1
 
     num_left = num_cells - len(cells)
     if num_left > 0:
-        cells += [generate_cell(reduce=False) for _ in range(num_left)]
+        cells += [normal_cell for _ in range(num_left)]
 
     input_indices = generate_recursive_indices(1, 2, num_cells)
     inputs = keras.Input(input_shape)
@@ -77,7 +79,8 @@ def generate_model(input_shape: tuple[int, int, int],
         input0 = hiddens[input_tup[0]]
         input1 = hiddens[input_tup[1]]
 
-        hidden = cell(input0, input1)
+        cell_name = ("cell_%d_reduce" if cell.reduce else "cell_%d_normal") % i
+        hidden = cell(input0, input1, name=cell_name)
         print(hidden.shape)
         hiddens.append(hidden)
 
@@ -141,6 +144,7 @@ if __name__ == "__main__":
         train_ds,
         epochs=epochs,
         callbacks=callbacks,
+        verbose=2,
         validation_data=val_ds)
 
     predictions = model.predict(x_test)
