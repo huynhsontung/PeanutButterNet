@@ -138,13 +138,21 @@ class Block():
                 **kwargs)
             hidden1 = self.op1(
                 hidden1,
-                reduce=(
-                    not reduce0),
+                reduce=(not reduce0),
                 name=name_right,
                 **kwargs)
 
+        if hidden0.shape[1:3] != hidden1.shape[1:3]:
+            if hidden0.shape[1] > hidden1.shape[1]:
+                factor = int(hidden0.shape[1] / hidden1.shape[1])
+                hidden0 = keras.layers.AvgPool2D(pool_size=factor)(hidden0)
+            else:
+                factor = int(hidden1.shape[1] / hidden0.shape[1])
+                hidden1 = keras.layers.AvgPool2D(pool_size=factor)(hidden1)
+
         channels0 = hidden0.shape[-1]
         channels1 = hidden1.shape[-1]
+
         if channels0 == channels1:
             return keras.layers.add([hidden0, hidden1], name=name_add)
         elif channels0 % channels1 != 0 and channels1 % channels0 != 0:

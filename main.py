@@ -7,9 +7,9 @@ import datetime
 
 
 hparams = {
-    'num_conv_filters': 24,
+    'num_conv_filters': 12,
     'num_blocks': 5,
-    'num_cells': 18,
+    'num_cells': 12,
     'num_reduction_cells': 2,
     'dropout_prob': 0.5,
     'filter_scaling_rate': 1.0,
@@ -129,11 +129,12 @@ if __name__ == "__main__":
                       from_logits=True),
                   metrics=['accuracy'])
 
-    log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    now_str = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_dir = "logs/fit/" + now_str
     tensorboard_cb = keras.callbacks.TensorBoard(
         log_dir=log_dir, histogram_freq=1)
     checkpoint_cb = keras.callbacks.ModelCheckpoint(
-        "cifar10_classification.h5", save_best_only=True
+        "cifar10_classification_%s.h5" % now_str, save_best_only=True
     )
     early_stopping_cb = keras.callbacks.EarlyStopping(
         monitor="val_accuracy", patience=15)
@@ -144,7 +145,6 @@ if __name__ == "__main__":
         train_ds,
         epochs=epochs,
         callbacks=callbacks,
-        verbose=2,
         validation_data=val_ds)
 
     predictions = model.predict(x_test)
