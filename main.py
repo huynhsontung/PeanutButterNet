@@ -85,7 +85,7 @@ def generate_model(input_shape: tuple[int, int, int],
     final_hidden = hiddens[-1]
     x = keras.layers.GlobalAvgPool2D()(final_hidden)
     x = keras.layers.Dropout(dropout_prob)(x)
-    outputs = keras.layers.Dense(num_classes, activation='softmax')(x)
+    outputs = keras.layers.Dense(num_classes)(x)
 
     model = keras.Model(inputs, outputs, name="PeanutButterNet")
     return model
@@ -95,6 +95,7 @@ if __name__ == "__main__":
     (x_train, y_train), (x_test, y_test) = keras.datasets.cifar10.load_data()
     image_shape = tuple(x_train.shape[1:])
     num_classes = 10
+    batch_size = 32
 
     x_val = x_train[-10000:]
     y_val = y_train[-10000:]
@@ -102,8 +103,10 @@ if __name__ == "__main__":
     y_train = y_train[:-10000]
 
     train_ds = tf.data.Dataset.from_tensor_slices((x_train, y_train))
-    train_ds.shuffle(len(x_train))
+    train_ds = train_ds.shuffle(len(x_train))
+    train_ds = train_ds.batch(32)
     val_ds = tf.data.Dataset.from_tensor_slices((x_val, y_val))
+    val_ds = val_ds.batch(32)
 
     preprocessors = [
         keras.layers.experimental.preprocessing.RandomFlip("horizontal"),
@@ -130,7 +133,7 @@ if __name__ == "__main__":
         "cifar10_classification.h5", save_best_only=True
     )
     early_stopping_cb = keras.callbacks.EarlyStopping(
-        monitor="val_acc", patience=15)
+        monitor="val_accuracy", patience=15)
 
     callbacks = [tensorboard_cb, checkpoint_cb, early_stopping_cb]
     epochs = 50
