@@ -148,11 +148,12 @@ if __name__ == "__main__":
         validation_data=val_ds)
 
     predictions = model.predict(x_test)
-    comparision = tf.math.equal(predictions, y_test)
-    comparision = tf.squeeze(comparision)
+    score = tf.nn.softmax(predictions, axis=-1)
+    labels = tf.math.argmax(score, axis=-1)
+    comparision = tf.math.equal(tf.cast(labels, dtype=tf.uint8), tf.squeeze(y_test))
     test_acc = tf.reduce_sum(tf.cast(comparision, dtype=tf.float32)).numpy()
-    test_acc = test_acc / len(y_test)
+    test_acc = test_acc / len(y_test) * 100
     print("Config:")
     print(hparams)
     print("Log dir: " + log_dir)
-    print("Test accuracy is %.5f percent." % test_acc)
+    print("Test accuracy is %.2f percent." % test_acc)
