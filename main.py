@@ -7,9 +7,9 @@ import datetime
 
 
 hparams = {
-    'num_conv_filters': 12,
+    'num_conv_filters': 6,
     'num_blocks': 5,
-    'num_cells': 12,
+    'num_cells': 18,
     'num_reduction_cells': 2,
     'dropout_prob': 0.5,
     'filter_scaling_rate': 1.0,
