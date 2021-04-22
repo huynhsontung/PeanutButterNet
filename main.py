@@ -49,8 +49,8 @@ def generate_cell(reduce=False) -> Cell:
     return Cell(blocks, block_inputs, reduce=reduce)
 
 
-def generate_model(input_shape: tuple[int, int, int],
-                   num_classes: int, hparams: dict[str, int], preprocessing: list[keras.layers.Layer] = [], rescaling=True) -> keras.Model:
+def generate_model(input_shape: 'tuple[int, int, int]',
+                   num_classes: int, hparams: 'dict[str, int]', preprocessing: 'list[keras.layers.Layer]' = []) -> keras.Model:
     num_cells = hparams['num_cells']
     num_reduction_cells = hparams['num_reduction_cells']
     dropout_prob = hparams['dropout_prob']
@@ -71,7 +71,9 @@ def generate_model(input_shape: tuple[int, int, int],
 
     input_indices = generate_recursive_indices(1, 2, num_cells)
     inputs = keras.Input(input_shape)
-    x = keras.Sequential(preprocessing)(inputs)
+    x = inputs
+    for pp in preprocessing:
+        x = pp(x)
     hiddens = [x]
 
     for i, cell in enumerate(cells):
@@ -92,6 +94,23 @@ def generate_model(input_shape: tuple[int, int, int],
 
     model = keras.Model(inputs, outputs, name="PeanutButterNet")
     return model
+
+
+def get_mobilenet(input_shape: 'tuple[int, int, int]',
+                  num_classes: int, preprocessing: 'list[keras.layers.Layer]' = []) -> keras.Sequential:
+    inputs = keras.layers.Input(shape=input_shape)
+    x = inputs
+    for pp in preprocessing:
+        x = pp(x)
+    # x = keras.Sequential(preprocessing)(inputs)
+    x = keras.applications.MobileNetV2(
+        input_shape=input_shape,
+        include_top=True,
+        weights=None,
+        classes=num_classes,
+        classifier_activation=None
+    )(x)
+    return keras.Model(inputs, x)
 
 
 if __name__ == "__main__":
@@ -117,11 +136,15 @@ if __name__ == "__main__":
         keras.layers.experimental.preprocessing.Rescaling(1. / 255)
     ]
 
-    model = generate_model(
-        image_shape,
-        num_classes,
-        hparams,
-        preprocessing=preprocessors)
+    num_params = 6000000
+    while num_params > 4000000 or num_params < 1000000:
+        model = generate_model(
+            image_shape,
+            num_classes,
+            hparams,
+            preprocessing=preprocessors)
+        num_params = model.count_params()
+    # model = get_mobilenet(image_shape, num_classes, preprocessors)
     model.summary()
 
     model.compile(optimizer='adam',
@@ -147,6 +170,7 @@ if __name__ == "__main__":
         callbacks=callbacks,
         validation_data=val_ds)
 
+    num_params = model.count_params()
     predictions = model.predict(x_test)
     score = tf.nn.softmax(predictions, axis=-1)
     labels = tf.math.argmax(score, axis=-1)
@@ -156,4 +180,5 @@ if __name__ == "__main__":
     print("Config:")
     print(hparams)
     print("Log dir: " + log_dir)
+    print(f"Total params: {num_params:,d}")
     print("Test accuracy is %.2f percent." % test_acc)

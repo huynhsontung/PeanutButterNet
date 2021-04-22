@@ -166,8 +166,8 @@ class Block():
 
 
 class Cell():
-    def __init__(self, blocks: list[Block],
-                 connections: list[tuple[int, int]],
+    def __init__(self, blocks: 'list[Block]',
+                 connections: 'list[tuple[int, int]]',
                  reduce=False) -> None:
         assert len(blocks) == len(connections)
         self.blocks = blocks
